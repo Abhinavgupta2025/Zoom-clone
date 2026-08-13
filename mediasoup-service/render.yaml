@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: mediasoup-sfu
+    env: docker
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: PORT
+        value: 4000
+      - key: LISTEN_IP
+        value: 0.0.0.0
+      - key: RTC_MIN_PORT
+        value: 10000
+      - key: RTC_MAX_PORT
+        value: 10100

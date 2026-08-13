@@ -51,27 +51,33 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS - match all incoming origins dynamically for Vercel/Render
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[],
-    allow_origin_regex=r".*",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 # ---------------------------------------------------------------------------
-# Token-bucket rate limit middleware
+# Robust CORS + Rate Limit Middleware
 # ---------------------------------------------------------------------------
 @app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    # Skip OPTIONS preflight requests + docs + health
-    if request.method == "OPTIONS" or request.url.path in ("/", "/docs", "/redoc", "/openapi.json", "/health"):
-        return await call_next(request)
+async def cors_and_rate_limit_middleware(request: Request, call_next):
+    origin = request.headers.get("origin", "*")
 
-    # Determine client IP (respect reverse-proxy header)
+    # 1. Direct OPTIONS preflight handler
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
+            },
+        )
+
+    # 2. Skip rate limiting for meta endpoints
+    if request.url.path in ("/", "/docs", "/redoc", "/openapi.json", "/health"):
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
+
+    # 3. Token bucket rate limiter check
     forwarded_for = request.headers.get("X-Forwarded-For")
     ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
         request.client.host if request.client else "unknown"
@@ -88,10 +94,14 @@ async def rate_limit_middleware(request: Request, call_next):
                 "Retry-After": str(int(retry_after) + 1),
                 "X-RateLimit-Limit": str(capacity),
                 "X-RateLimit-Remaining": "0",
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
             },
         )
 
     response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
     response.headers["X-RateLimit-Limit"] = str(capacity)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     return response

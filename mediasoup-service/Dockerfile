@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM node:20-slim
 
 # Install C++ compiler & Python tools required to build mediasoup native bindings
 RUN apt-get update && apt-get install -y \

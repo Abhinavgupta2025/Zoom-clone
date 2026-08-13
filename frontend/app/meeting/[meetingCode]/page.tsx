@@ -94,7 +94,10 @@ export default function MeetingRoomPage() {
         }
 
         // 3. Connect to FastAPI WS presence channel
-        const ws = new WebSocket(`${WS_BASE}/ws/meetings/${meetingCode}`);
+        const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+        const host = typeof window !== "undefined" ? window.location.host : "localhost:8000";
+        const wsUrl = process.env.NEXT_PUBLIC_WS_URL || `${protocol}//${host}`;
+        const ws = new WebSocket(`${wsUrl}/ws/meetings/${meetingCode}`);
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -141,7 +144,20 @@ export default function MeetingRoomPage() {
 
     initRoom();
 
+    // 4. Polling fallback to keep participant list fresh
+    const pollInterval = setInterval(async () => {
+      try {
+        const activeParts = await api.getParticipants(meetingCode);
+        if (activeParts && activeParts.length > 0) {
+          setParticipants(activeParts);
+        }
+      } catch (pollErr) {
+        // Silent fail on background poll
+      }
+    }, 3000);
+
     return () => {
+      clearInterval(pollInterval);
       mediasoupManagerRef.current?.disconnect();
       if (wsRef.current) {
         wsRef.current.close();

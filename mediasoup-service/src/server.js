@@ -1,8 +1,8 @@
 /**
- * mediasoup SFU Signaling Server (Express + Socket.io)
+ * Express + Socket.io signaling server for mediasoup SFU.
+ * Port 4000 (configurable via process.env.PORT)
  */
 
-require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -15,6 +15,7 @@ app.use(cors());
 app.use(express.json());
 
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -23,28 +24,28 @@ const io = new Server(server, {
 });
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "mediasoup-sfu" });
+  res.json({ status: "ok", service: "mediasoup-sfu", timestamp: new Date().toISOString() });
 });
 
+// Socket.io signaling logic
 io.on("connection", (socket) => {
-  console.log(`[Socket] Connected: ${socket.id}`);
   let currentMeetingCode = null;
   let currentParticipantId = null;
+
+  console.log(`[Socket Connected] id=${socket.id}`);
 
   socket.on("join-room", async ({ meetingCode, participantId, displayName }, cb) => {
     try {
       currentMeetingCode = meetingCode;
       currentParticipantId = participantId;
 
-      await rooms.addPeer(meetingCode, participantId, displayName);
       socket.join(meetingCode);
+      await rooms.addPeer(meetingCode, participantId);
 
-      // Get existing producers in the room to inform the newly joined participant
       const existingProducers = rooms.getExistingProducers(meetingCode, participantId);
 
+      console.log(`[Join Room] peer=${participantId} (${displayName}) room=${meetingCode}`);
       if (cb) cb({ success: true, existingProducers });
-
-      console.log(`[Socket] ${displayName} (${participantId}) joined room ${meetingCode}`);
     } catch (err) {
       console.error("[Socket] join-room error:", err);
       if (cb) cb({ error: err.message });
@@ -53,8 +54,8 @@ io.on("connection", (socket) => {
 
   socket.on("get-router-rtp-capabilities", async ({ meetingCode }, cb) => {
     try {
-      const rtpCapabilities = await rooms.getRouterCapabilities(meetingCode);
-      if (cb) cb({ rtpCapabilities });
+      const capabilities = await rooms.getRouterCapabilities(meetingCode);
+      if (cb) cb({ capabilities });
     } catch (err) {
       console.error("[Socket] get-router-rtp-capabilities error:", err);
       if (cb) cb({ error: err.message });
@@ -124,6 +125,16 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("resume-consumer", async ({ meetingCode, participantId, consumerId }, cb) => {
+    try {
+      await rooms.resumeConsumer(meetingCode, participantId, consumerId);
+      if (cb) cb({ success: true });
+    } catch (err) {
+      console.error("[Socket] resume-consumer error:", err);
+      if (cb) cb({ error: err.message });
+    }
+  });
+
   socket.on("disconnect", () => {
     if (currentMeetingCode && currentParticipantId) {
       console.log(`[Socket] Disconnected: ${currentParticipantId} from room ${currentMeetingCode}`);
@@ -140,11 +151,11 @@ const PORT = process.env.PORT || 4000;
 async function start() {
   await createWorkers();
   server.listen(PORT, () => {
-    console.log(`🚀 mediasoup SFU service listening on http://localhost:${PORT}`);
+    console.log(`[mediasoup SFU] Server listening on port ${PORT}`);
   });
 }
 
 start().catch((err) => {
-  console.error("Failed to start mediasoup SFU service:", err);
+  console.error("[mediasoup SFU] Failed to start:", err);
   process.exit(1);
 });

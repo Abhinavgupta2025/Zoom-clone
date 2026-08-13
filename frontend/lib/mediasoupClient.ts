@@ -23,15 +23,25 @@ export class MediasoupClientManager {
   private remoteTracks: Map<string, RemoteTrack> = new Map(); // consumerId -> RemoteTrack
   private onRemoteTrackCallback?: (tracks: RemoteTrack[]) => void;
 
-  constructor(private meetingCode: string, private participantId: string, private displayName: string) {}
+  constructor(
+    private meetingCode: string,
+    private participantId: string,
+    private displayName: string
+  ) {}
 
-  public async connect(onRemoteTrackUpdate: (tracks: RemoteTrack[]) => void): Promise<void> {
-    this.onRemoteTrackCallback = onRemoteTrackUpdate;
+  public onRemoteTracks(cb: (tracks: RemoteTrack[]) => void) {
+    this.onRemoteTrackCallback = cb;
+  }
 
+  public async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.socket = io(MEDIASOUP_SERVER_URL);
+      this.socket = io(MEDIASOUP_SERVER_URL, {
+        transports: ["websocket"],
+      });
 
       this.socket.on("connect", async () => {
+        console.log("[SFU] Socket connected:", this.socket?.id);
+
         try {
           // 1. Join room
           const joinRes: any = await this.emitAsync("join-room", {
@@ -40,27 +50,27 @@ export class MediasoupClientManager {
             displayName: this.displayName,
           });
 
-          if (joinRes.error) throw new Error(joinRes.error);
+          if (joinRes.error) {
+            reject(new Error(joinRes.error));
+            return;
+          }
 
-          // 2. Init mediasoup Device
-          const capsRes: any = await this.emitAsync("get-router-rtp-capabilities", {
+          // 2. Load device capabilities
+          const routerCapsRes: any = await this.emitAsync("get-router-rtp-capabilities", {
             meetingCode: this.meetingCode,
           });
 
-          if (capsRes.error) throw new Error(capsRes.error);
-
           this.device = new Device();
-          await this.device.load({ routerRtpCapabilities: capsRes.rtpCapabilities });
+          await this.device.load({ routerRtpCapabilities: routerCapsRes.capabilities });
 
-          // 3. Create Transports
-          await this.initSendTransport();
-          await this.initRecvTransport();
+          // 3. Create send and recv transports
+          await this.createSendTransport();
+          await this.createRecvTransport();
 
-          // 4. Consume existing producers if any
-          if (joinRes.existingProducers && joinRes.existingProducers.length > 0) {
-            for (const prod of joinRes.existingProducers) {
-              await this.consumeProducer(prod.producerId, prod.participantId);
-            }
+          // 4. Consume existing producers in room
+          const existingProducers: any[] = joinRes.existingProducers || [];
+          for (const prod of existingProducers) {
+            await this.consumeProducer(prod.producerId, prod.participantId);
           }
 
           // 5. Listen for new producers in room
@@ -68,13 +78,12 @@ export class MediasoupClientManager {
             await this.consumeProducer(producerId, participantId);
           });
 
-          // 6. Listen for left participants
           this.socket?.on("participant-left", ({ participantId }: any) => {
             this.handleParticipantLeft(participantId);
           });
 
           resolve();
-        } catch (err) {
+        } catch (err: any) {
           reject(err);
         }
       });
@@ -85,16 +94,21 @@ export class MediasoupClientManager {
     });
   }
 
-  private emitAsync(event: string, data: any): Promise<any> {
-    return new Promise((resolve) => {
-      if (!this.socket) return resolve({ error: "Socket not connected" });
-      this.socket.emit(event, data, (response: any) => {
-        resolve(response || {});
-      });
-    });
+  public async produceLocalTracks(stream: MediaStream): Promise<void> {
+    if (!this.sendTransport) return;
+
+    const audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack && !this.audioProducer) {
+      this.audioProducer = await this.sendTransport.produce({ track: audioTrack });
+    }
+
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack && !this.videoProducer) {
+      this.videoProducer = await this.sendTransport.produce({ track: videoTrack });
+    }
   }
 
-  private async initSendTransport(): Promise<void> {
+  private async createSendTransport(): Promise<void> {
     if (!this.device) return;
 
     const res: any = await this.emitAsync("create-webrtc-transport", {
@@ -103,16 +117,15 @@ export class MediasoupClientManager {
       direction: "send",
     });
 
-    if (res.error) throw new Error(res.error);
-
-    this.sendTransport = this.device.createSendTransport(res.transportParams);
+    const { transportParams } = res;
+    this.sendTransport = this.device.createSendTransport(transportParams);
 
     this.sendTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
         await this.emitAsync("connect-transport", {
           meetingCode: this.meetingCode,
           participantId: this.participantId,
-          transportId: this.sendTransport!.id,
+          transportId: this.sendTransport?.id,
           dtlsParameters,
         });
         callback();
@@ -126,7 +139,7 @@ export class MediasoupClientManager {
         const prodRes: any = await this.emitAsync("produce", {
           meetingCode: this.meetingCode,
           participantId: this.participantId,
-          transportId: this.sendTransport!.id,
+          transportId: this.sendTransport?.id,
           kind,
           rtpParameters,
         });
@@ -137,7 +150,7 @@ export class MediasoupClientManager {
     });
   }
 
-  private async initRecvTransport(): Promise<void> {
+  private async createRecvTransport(): Promise<void> {
     if (!this.device) return;
 
     const res: any = await this.emitAsync("create-webrtc-transport", {
@@ -146,16 +159,15 @@ export class MediasoupClientManager {
       direction: "recv",
     });
 
-    if (res.error) throw new Error(res.error);
-
-    this.recvTransport = this.device.createRecvTransport(res.transportParams);
+    const { transportParams } = res;
+    this.recvTransport = this.device.createRecvTransport(transportParams);
 
     this.recvTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
         await this.emitAsync("connect-transport", {
           meetingCode: this.meetingCode,
           participantId: this.participantId,
-          transportId: this.recvTransport!.id,
+          transportId: this.recvTransport?.id,
           dtlsParameters,
         });
         callback();
@@ -163,17 +175,6 @@ export class MediasoupClientManager {
         errback(err);
       }
     });
-  }
-
-  public async produceTracks(audioTrack?: MediaStreamTrack, videoTrack?: MediaStreamTrack): Promise<void> {
-    if (!this.sendTransport) return;
-
-    if (audioTrack) {
-      this.audioProducer = await this.sendTransport.produce({ track: audioTrack });
-    }
-    if (videoTrack) {
-      this.videoProducer = await this.sendTransport.produce({ track: videoTrack });
-    }
   }
 
   public toggleAudio(enabled: boolean): void {
@@ -219,6 +220,14 @@ export class MediasoupClientManager {
       rtpParameters: consumerParams.rtpParameters,
     });
 
+    // Unpause local consumer track and tell SFU server to resume consumer
+    await consumer.resume();
+    await this.emitAsync("resume-consumer", {
+      meetingCode: this.meetingCode,
+      participantId: this.participantId,
+      consumerId: consumer.id,
+    });
+
     const { track } = consumer;
     const stream = new MediaStream([track]);
 
@@ -251,10 +260,26 @@ export class MediasoupClientManager {
   }
 
   public disconnect(): void {
-    this.audioProducer?.close();
-    this.videoProducer?.close();
-    this.sendTransport?.close();
-    this.recvTransport?.close();
-    this.socket?.disconnect();
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
+    }
+    this.audioProducer = null;
+    this.videoProducer = null;
+    this.sendTransport = null;
+    this.recvTransport = null;
+    this.remoteTracks.clear();
+  }
+
+  private emitAsync(event: string, data: any): Promise<any> {
+    return new Promise((resolve) => {
+      if (!this.socket) {
+        resolve({ error: "Socket not initialized" });
+        return;
+      }
+      this.socket.emit(event, data, (response: any) => {
+        resolve(response || {});
+      });
+    });
   }
 }

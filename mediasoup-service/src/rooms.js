@@ -1,64 +1,33 @@
 /**
- * Room manager — one Router per meeting room.
- *
- * Each room tracks:
- *   - router: mediasoup.Router
- *   - peers: Map<participantId, { sendTransport, recvTransport, producers, consumers }>
+ * Room and Router management for mediasoup SFU.
+ * Maps meetingCode -> { router, peers: Map<participantId, { sendTransport, recvTransport, producers, consumers }> }
  */
 
+const mediasoup = require("mediasoup");
 const { getWorker } = require("./workers");
 
-// Supported RTP codecs (audio + video)
-const MEDIA_CODECS = [
-  {
-    kind: "audio",
-    mimeType: "audio/opus",
-    clockRate: 48000,
-    channels: 2,
-  },
-  {
-    kind: "video",
-    mimeType: "video/VP8",
-    clockRate: 90000,
-    parameters: { "x-google-start-bitrate": 1000 },
-  },
-  {
-    kind: "video",
-    mimeType: "video/VP9",
-    clockRate: 90000,
-    parameters: {
-      "profile-id": 2,
-      "x-google-start-bitrate": 1000,
-    },
-  },
-  {
-    kind: "video",
-    mimeType: "video/H264",
-    clockRate: 90000,
-    parameters: {
-      "packetization-mode": 1,
-      "profile-level-id": "4d0032",
-      "level-asymmetry-allowed": 1,
-      "x-google-start-bitrate": 1000,
-    },
-  },
-];
-
-// rooms: Map<meetingCode, { router, peers: Map<participantId, Peer> }>
 const rooms = new Map();
+let publicIp = process.env.ANNOUNCED_IP || null;
+
+async function getAnnouncedIp() {
+  if (publicIp) return publicIp;
+  try {
+    const res = await fetch("https://api.ipify.org?format=json");
+    const data = await res.json();
+    if (data && data.ip) {
+      publicIp = data.ip;
+      console.log(`[mediasoup] Auto-detected public ANNOUNCED_IP: ${publicIp}`);
+      return publicIp;
+    }
+  } catch (e) {
+    console.warn("[mediasoup] Public IP auto-detection failed, using 127.0.0.1");
+  }
+  publicIp = "127.0.0.1";
+  return publicIp;
+}
 
 /**
- * @typedef {Object} Peer
- * @property {string} participantId
- * @property {string} displayName
- * @property {mediasoup.WebRtcTransport|null} sendTransport
- * @property {mediasoup.WebRtcTransport|null} recvTransport
- * @property {Map<string, mediasoup.Producer>} producers  - producerId -> Producer
- * @property {Map<string, mediasoup.Consumer>} consumers  - consumerId -> Consumer
- */
-
-/**
- * Get or create a room for a meeting code.
+ * Get or create a room for a given meeting code.
  * @param {string} meetingCode
  * @returns {Promise<{ router: mediasoup.Router, peers: Map }>}
  */
@@ -68,10 +37,42 @@ async function getOrCreateRoom(meetingCode) {
   }
 
   const worker = getWorker();
-  const router = await worker.createRouter({ mediaCodecs: MEDIA_CODECS });
-  const room = { router, peers: new Map() };
+  const mediaCodecs = [
+    {
+      kind: "audio",
+      mimeType: "audio/opus",
+      clockRate: 48000,
+      channels: 2,
+    },
+    {
+      kind: "video",
+      mimeType: "video/VP8",
+      clockRate: 90000,
+      parameters: {
+        "x-google-start-bitrate": 1000,
+      },
+    },
+    {
+      kind: "video",
+      mimeType: "video/H264",
+      clockRate: 90000,
+      parameters: {
+        "packetization-mode": 1,
+        "profile-level-id": "42e01f",
+        "level-asymmetry-allowed": 1,
+      },
+    },
+  ];
+
+  const router = await worker.createRouter({ mediaCodecs });
+  console.log(`[Router Created] meetingCode=${meetingCode} routerId=${router.id}`);
+
+  const room = {
+    router,
+    peers: new Map(),
+  };
+
   rooms.set(meetingCode, room);
-  console.log(`[Room] Created room for meeting: ${meetingCode}`);
   return room;
 }
 
@@ -79,14 +80,16 @@ async function getOrCreateRoom(meetingCode) {
  * Add a peer to a room.
  * @param {string} meetingCode
  * @param {string} participantId
- * @param {string} displayName
- * @returns {Promise<Peer>}
+ * @returns {Promise<Object>} peer object
  */
-async function addPeer(meetingCode, participantId, displayName) {
+async function addPeer(meetingCode, participantId) {
   const room = await getOrCreateRoom(meetingCode);
+  if (room.peers.has(participantId)) {
+    return room.peers.get(participantId);
+  }
+
   const peer = {
     participantId,
-    displayName,
     sendTransport: null,
     recvTransport: null,
     producers: new Map(),
@@ -118,11 +121,12 @@ async function createWebRtcTransport(meetingCode, participantId, direction) {
   const peer = room.peers.get(participantId);
   if (!peer) throw new Error(`Peer ${participantId} not found in room ${meetingCode}`);
 
+  const announced = await getAnnouncedIp();
   const transport = await room.router.createWebRtcTransport({
     listenIps: [
       {
         ip: process.env.LISTEN_IP || "0.0.0.0",
-        announcedIp: process.env.ANNOUNCED_IP || "127.0.0.1",
+        announcedIp: announced,
       },
     ],
     enableUdp: true,
@@ -142,19 +146,19 @@ async function createWebRtcTransport(meetingCode, participantId, direction) {
     peer.recvTransport = transport;
   }
 
-  return {
-    transportParams: {
-      id: transport.id,
-      iceParameters: transport.iceParameters,
-      iceCandidates: transport.iceCandidates,
-      dtlsParameters: transport.dtlsParameters,
-    },
-    transport,
+  const transportParams = {
+    id: transport.id,
+    iceParameters: transport.iceParameters,
+    iceCandidates: transport.iceCandidates,
+    dtlsParameters: transport.dtlsParameters,
   };
+
+  console.log(`[WebRtcTransport Created] peer=${participantId} dir=${direction} id=${transport.id}`);
+  return { transportParams, transport };
 }
 
 /**
- * Connect a transport (client provides DTLS params after createWebRtcTransport).
+ * Connect a WebRTC transport with DTLS parameters.
  * @param {string} meetingCode
  * @param {string} participantId
  * @param {string} transportId
@@ -167,16 +171,14 @@ async function connectTransport(meetingCode, participantId, transportId, dtlsPar
   const peer = room.peers.get(participantId);
   if (!peer) throw new Error(`Peer ${participantId} not found`);
 
-  const transport =
-    peer.sendTransport?.id === transportId
-      ? peer.sendTransport
-      : peer.recvTransport?.id === transportId
-      ? peer.recvTransport
-      : null;
+  let transport = null;
+  if (peer.sendTransport?.id === transportId) transport = peer.sendTransport;
+  if (peer.recvTransport?.id === transportId) transport = peer.recvTransport;
 
-  if (!transport) throw new Error(`Transport ${transportId} not found`);
+  if (!transport) throw new Error(`Transport ${transportId} not found for peer ${participantId}`);
 
   await transport.connect({ dtlsParameters });
+  console.log(`[Transport Connected] peer=${participantId} transportId=${transportId}`);
 }
 
 /**
@@ -238,7 +240,7 @@ async function consume(meetingCode, consumerParticipantId, producerId, rtpCapabi
   const consumer = await consumerPeer.recvTransport.consume({
     producerId: producer.id,
     rtpCapabilities,
-    paused: true, // client must call consumer.resume() after receiving params
+    paused: false, // Start unpaused so video packets flow immediately!
   });
 
   consumer.on("transportclose", () => consumer.close());
@@ -249,8 +251,10 @@ async function consume(meetingCode, consumerParticipantId, producerId, rtpCapabi
 
   consumerPeer.consumers.set(consumer.id, consumer);
 
+  console.log(`[Consume] peer=${consumerParticipantId} producerId=${producer.id} consumerId=${consumer.id}`);
+
   return {
-    consumerId: consumer.id,
+    id: consumer.id,
     producerId: producer.id,
     kind: consumer.kind,
     rtpParameters: consumer.rtpParameters,
@@ -258,27 +262,46 @@ async function consume(meetingCode, consumerParticipantId, producerId, rtpCapabi
 }
 
 /**
- * Get all producer IDs in a room (excluding a specific peer's own producers).
+ * Resume a consumer on the SFU server.
+ */
+async function resumeConsumer(meetingCode, participantId, consumerId) {
+  const room = rooms.get(meetingCode);
+  if (!room) return;
+  const peer = room.peers.get(participantId);
+  if (!peer) return;
+  const consumer = peer.consumers.get(consumerId);
+  if (consumer) {
+    await consumer.resume();
+    console.log(`[Resume Consumer] peer=${participantId} consumerId=${consumerId}`);
+  }
+}
+
+/**
+ * Get all active producers in a room except the requesting peer's own producers.
  * @param {string} meetingCode
  * @param {string} excludeParticipantId
- * @returns {{ participantId: string, producerId: string, kind: string }[]}
+ * @returns {Array<{ producerId: string, participantId: string, kind: string }>}
  */
 function getExistingProducers(meetingCode, excludeParticipantId) {
   const room = rooms.get(meetingCode);
   if (!room) return [];
 
-  const result = [];
-  for (const [pid, peer] of room.peers.entries()) {
-    if (pid === excludeParticipantId) continue;
+  const list = [];
+  for (const [pId, peer] of room.peers.entries()) {
+    if (pId === excludeParticipantId) continue;
     for (const [producerId, producer] of peer.producers.entries()) {
-      result.push({ participantId: pid, producerId, kind: producer.kind });
+      list.push({
+        producerId,
+        participantId: pId,
+        kind: producer.kind,
+      });
     }
   }
-  return result;
+  return list;
 }
 
 /**
- * Remove a peer and close all their transports/producers/consumers.
+ * Clean up a peer when they leave or disconnect.
  * @param {string} meetingCode
  * @param {string} participantId
  */
@@ -289,19 +312,30 @@ function removePeer(meetingCode, participantId) {
   const peer = room.peers.get(participantId);
   if (!peer) return;
 
-  peer.producers.forEach((p) => p.close());
-  peer.consumers.forEach((c) => c.close());
-  peer.sendTransport?.close();
-  peer.recvTransport?.close();
+  // Close producers
+  for (const producer of peer.producers.values()) {
+    producer.close();
+  }
+  peer.producers.clear();
+
+  // Close consumers
+  for (const consumer of peer.consumers.values()) {
+    consumer.close();
+  }
+  peer.consumers.clear();
+
+  // Close transports
+  if (peer.sendTransport) peer.sendTransport.close();
+  if (peer.recvTransport) peer.recvTransport.close();
+
   room.peers.delete(participantId);
+  console.log(`[Peer Removed] peer=${participantId} room=${meetingCode}`);
 
-  console.log(`[Room] Peer removed: ${participantId} from room ${meetingCode}`);
-
-  // Clean up empty rooms
+  // If room is empty, close router and delete room
   if (room.peers.size === 0) {
     room.router.close();
     rooms.delete(meetingCode);
-    console.log(`[Room] Room closed: ${meetingCode}`);
+    console.log(`[Room Deleted] meetingCode=${meetingCode}`);
   }
 }
 
@@ -313,6 +347,7 @@ module.exports = {
   connectTransport,
   produce,
   consume,
+  resumeConsumer,
   getExistingProducers,
   removePeer,
 };

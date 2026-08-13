@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# Next.js build outputs
+.next/
+out/
+build/
+dist/
+
+# Environment files & local databases
+.env
+.env.local
+.env.production
+*.db
+*.sqlite3
+
+# System files
+.DS_Store
+*.log

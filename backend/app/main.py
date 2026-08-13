@@ -104,8 +104,18 @@ app.include_router(websocket.router)
 
 
 # ---------------------------------------------------------------------------
-# Health check
+# Health & Root endpoints
 # ---------------------------------------------------------------------------
+@app.get("/")
+async def root():
+    return {
+        "status": "ok",
+        "message": "Zoom Clone FastAPI Backend",
+        "docs_url": "/docs",
+        "health_url": "/health",
+    }
+
+
 @app.get("/health", tags=["meta"])
 async def health():
     return {"status": "ok", "version": "1.0.0"}

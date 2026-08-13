@@ -66,21 +66,23 @@ function LobbyContent() {
   }, []);
 
   const toggleMic = () => {
+    const nextMuted = !isMuted;
     if (localStream) {
       localStream.getAudioTracks().forEach((track) => {
-        track.enabled = isMuted;
+        track.enabled = !nextMuted;
       });
     }
-    setIsMuted(!isMuted);
+    setIsMuted(nextMuted);
   };
 
   const toggleCamera = () => {
+    const nextVideoOff = !isVideoOff;
     if (localStream) {
       localStream.getVideoTracks().forEach((track) => {
-        track.enabled = isVideoOff;
+        track.enabled = !nextVideoOff;
       });
     }
-    setIsVideoOff(!isVideoOff);
+    setIsVideoOff(nextVideoOff);
   };
 
   const handleJoinNow = async () => {
@@ -130,15 +132,16 @@ function LobbyContent() {
         {/* Left: Camera Preview Tile */}
         <div className="md:col-span-7 space-y-4">
           <div className="relative w-full aspect-video bg-zoom-cardBg border border-zoom-border rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
-            {!isVideoOff && localStream ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover scale-x-[-1]"
-              />
-            ) : (
+            {/* Video element always mounted so srcObject binding is instant */}
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className={`w-full h-full object-cover scale-x-[-1] ${!isVideoOff && localStream ? "block" : "hidden"}`}
+            />
+
+            {(isVideoOff || !localStream) && (
               <div className="flex flex-col items-center justify-center gap-3">
                 <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-zoom-blue to-purple-600 flex items-center justify-center text-white text-2xl font-bold">
                   {displayName[0]?.toUpperCase() || <User className="w-8 h-8" />}

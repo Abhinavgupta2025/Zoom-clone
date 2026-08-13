@@ -54,7 +54,12 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r".*",
+    allow_origins=[
+        "https://zoom-clone-amber-three.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:3001",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost:.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

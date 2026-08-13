@@ -66,8 +66,8 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    # Skip docs + health
-    if request.url.path in ("/docs", "/redoc", "/openapi.json", "/health"):
+    # Skip OPTIONS preflight requests + docs + health
+    if request.method == "OPTIONS" or request.url.path in ("/", "/docs", "/redoc", "/openapi.json", "/health"):
         return await call_next(request)
 
     # Determine client IP (respect reverse-proxy header)

@@ -1,5 +1,4 @@
-import { Device } from "mediasoup-client";
-import { Transport, Producer, Consumer, RtpCapabilities } from "mediasoup-client/lib/types";
+import { Device, types } from "mediasoup-client";
 import { io, Socket } from "socket.io-client";
 
 const MEDIASOUP_SERVER_URL = process.env.NEXT_PUBLIC_MEDIASOUP_URL || "http://localhost:4000";
@@ -15,11 +14,11 @@ export interface RemoteTrack {
 export class MediasoupClientManager {
   private socket: Socket | null = null;
   private device: Device | null = null;
-  private sendTransport: Transport | null = null;
-  private recvTransport: Transport | null = null;
+  private sendTransport: types.Transport | null = null;
+  private recvTransport: types.Transport | null = null;
 
-  public audioProducer: Producer | null = null;
-  public videoProducer: Producer | null = null;
+  public audioProducer: types.Producer | null = null;
+  public videoProducer: types.Producer | null = null;
 
   private remoteTracks: Map<string, RemoteTrack> = new Map(); // consumerId -> RemoteTrack
   private onRemoteTrackCallback?: (tracks: RemoteTrack[]) => void;
@@ -65,12 +64,12 @@ export class MediasoupClientManager {
           }
 
           // 5. Listen for new producers in room
-          this.socket.on("new-producer", async ({ producerId, participantId }: any) => {
+          this.socket?.on("new-producer", async ({ producerId, participantId }: any) => {
             await this.consumeProducer(producerId, participantId);
           });
 
           // 6. Listen for left participants
-          this.socket.on("participant-left", ({ participantId }: any) => {
+          this.socket?.on("participant-left", ({ participantId }: any) => {
             this.handleParticipantLeft(participantId);
           });
 
@@ -80,7 +79,7 @@ export class MediasoupClientManager {
         }
       });
 
-      this.socket.on("connect_error", (err) => {
+      this.socket?.on("connect_error", (err) => {
         reject(new Error(`Failed to connect to SFU: ${err.message}`));
       });
     });
@@ -236,12 +235,12 @@ export class MediasoupClientManager {
 
   private handleParticipantLeft(participantId: string): void {
     let changed = false;
-    for (const [key, item] of this.remoteTracks.entries()) {
+    this.remoteTracks.forEach((item, key) => {
       if (item.participantId === participantId) {
         this.remoteTracks.delete(key);
         changed = true;
       }
-    }
+    });
     if (changed) this.notifyRemoteTracksChanged();
   }
 

@@ -51,11 +51,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS - match all incoming origins dynamically for Vercel/Render
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origins=[],
+    allow_origin_regex=r".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

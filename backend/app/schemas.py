@@ -11,6 +11,11 @@ from app.models import MeetingStatus, MeetingType
 # ---------------------------------------------------------------------------
 # User
 # ---------------------------------------------------------------------------
+class UserCreate(BaseModel):
+    email: str
+    name: Optional[str] = "User"
+
+
 class UserOut(BaseModel):
     id: int
     name: str

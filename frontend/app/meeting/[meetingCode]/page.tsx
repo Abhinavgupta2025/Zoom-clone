@@ -168,33 +168,35 @@ export default function MeetingRoomPage() {
 
   // Handle local track toggle
   const handleToggleMute = () => {
+    const nextMuted = !isMuted;
     if (localStream) {
       localStream.getAudioTracks().forEach((track) => {
-        track.enabled = isMuted;
+        track.enabled = !nextMuted;
       });
     }
-    mediasoupManagerRef.current?.toggleAudio(isMuted);
-    setIsMuted(!isMuted);
+    mediasoupManagerRef.current?.toggleAudio(!nextMuted);
+    setIsMuted(nextMuted);
 
     if (wsRef.current && participant) {
       wsRef.current.send(
         JSON.stringify({
           event: "muted",
           participant_id: participant.participant_id,
-          is_muted: !isMuted,
+          is_muted: nextMuted,
         })
       );
     }
   };
 
   const handleToggleVideo = () => {
+    const nextVideoOff = !isVideoOff;
     if (localStream) {
       localStream.getVideoTracks().forEach((track) => {
-        track.enabled = isVideoOff;
+        track.enabled = !nextVideoOff;
       });
     }
-    mediasoupManagerRef.current?.toggleVideo(isVideoOff);
-    setIsVideoOff(!isVideoOff);
+    mediasoupManagerRef.current?.toggleVideo(!nextVideoOff);
+    setIsVideoOff(nextVideoOff);
   };
 
   const handleLeave = async () => {

@@ -112,16 +112,25 @@ async def schedule_meeting(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/users (Lightweight email authentication / user lookup)
+# ---------------------------------------------------------------------------
+@router.post("/users", response_model=schemas.UserOut)
+async def get_or_create_user(body: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
+    user = await crud.get_or_create_user_by_email(db, email=body.email, name=body.name or "User")
+    return UserOut.model_validate(user)
+
+
+# ---------------------------------------------------------------------------
 # GET /api/meetings/upcoming
 # ---------------------------------------------------------------------------
 @router.get("/upcoming", response_model=List[MeetingOut])
-async def list_upcoming(db: AsyncSession = Depends(get_db)):
-    cache_key = KEY_MEETINGS_UPCOMING.format(user_id=settings.DEFAULT_USER_ID)
+async def list_upcoming(email: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+    cache_key = f"meetings:upcoming:{email or settings.DEFAULT_USER_ID}"
     cached = await cache.get(cache_key)
     if cached is not None:
         return cached
 
-    meetings = await crud.get_upcoming_meetings(db, settings.DEFAULT_USER_ID)
+    meetings = await crud.get_upcoming_meetings(db, settings.DEFAULT_USER_ID, email=email)
     result = [MeetingOut.model_validate(m).model_dump(mode="json") for m in meetings]
     await cache.set(cache_key, result, ttl=TTL_MEETINGS_LIST)
     return result
@@ -131,13 +140,13 @@ async def list_upcoming(db: AsyncSession = Depends(get_db)):
 # GET /api/meetings/recent
 # ---------------------------------------------------------------------------
 @router.get("/recent", response_model=List[MeetingOut])
-async def list_recent(db: AsyncSession = Depends(get_db)):
-    cache_key = KEY_MEETINGS_RECENT.format(user_id=settings.DEFAULT_USER_ID)
+async def list_recent(email: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+    cache_key = f"meetings:recent:{email or settings.DEFAULT_USER_ID}"
     cached = await cache.get(cache_key)
     if cached is not None:
         return cached
 
-    meetings = await crud.get_recent_meetings(db, settings.DEFAULT_USER_ID)
+    meetings = await crud.get_recent_meetings(db, settings.DEFAULT_USER_ID, email=email)
     result = [MeetingOut.model_validate(m).model_dump(mode="json") for m in meetings]
     await cache.set(cache_key, result, ttl=TTL_MEETINGS_LIST)
     return result

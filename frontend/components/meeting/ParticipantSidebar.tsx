@@ -39,46 +39,53 @@ export function ParticipantSidebar({
 
       {/* Participant List */}
       <div className="flex-1 overflow-y-auto p-3 space-y-1">
-        {participants.map((p) => (
-          <div
-            key={p.id}
-            className="flex items-center justify-between p-2.5 rounded-lg hover:bg-zoom-surface group transition-colors"
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-zoom-blue to-purple-600 flex items-center justify-center text-white font-bold text-xs flex-shrink-0">
-                {p.display_name[0]?.toUpperCase() || "U"}
+        {participants.map((p, index) => {
+          const formattedName =
+            p.display_name.startsWith("Guest") || p.display_name.startsWith("Participant")
+              ? `Participant ${index + 1}`
+              : p.display_name;
+
+          return (
+            <div
+              key={p.id}
+              className="flex items-center justify-between p-2.5 rounded-lg hover:bg-zoom-surface group transition-colors"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-zoom-blue to-purple-600 flex items-center justify-center text-white font-bold text-xs flex-shrink-0">
+                  {formattedName[0]?.toUpperCase() || "P"}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-white truncate flex items-center gap-1.5">
+                    {formattedName}
+                    {p.is_host && (
+                      <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.2 rounded font-semibold flex items-center gap-0.5">
+                        <Shield className="w-2.5 h-2.5" /> Host
+                      </span>
+                    )}
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-white truncate flex items-center gap-1.5">
-                  {p.display_name}
-                  {p.is_host && (
-                    <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.2 rounded font-semibold flex items-center gap-0.5">
-                      <Shield className="w-2.5 h-2.5" /> Host
-                    </span>
-                  )}
-                </p>
+
+              <div className="flex items-center gap-1">
+                {p.is_muted ? (
+                  <MicOff className="w-4 h-4 text-red-400" />
+                ) : (
+                  <Mic className="w-4 h-4 text-green-400" />
+                )}
+
+                {isHost && !p.is_host && (
+                  <button
+                    onClick={() => onRemoveParticipant(p.id)}
+                    title="Remove participant"
+                    className="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-300 transition-opacity"
+                  >
+                    <UserX className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
-
-            <div className="flex items-center gap-1">
-              {p.is_muted ? (
-                <MicOff className="w-4 h-4 text-red-400" />
-              ) : (
-                <Mic className="w-4 h-4 text-green-400" />
-              )}
-
-              {isHost && !p.is_host && (
-                <button
-                  onClick={() => onRemoveParticipant(p.id)}
-                  title="Remove participant"
-                  className="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-300 transition-opacity"
-                >
-                  <UserX className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Host Controls Footer */}

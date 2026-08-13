@@ -152,12 +152,27 @@ async def get_meeting_by_code(db: AsyncSession, meeting_code: str) -> Optional[M
     return result.scalar_one_or_none()
 
 
-async def get_upcoming_meetings(db: AsyncSession, user_id: int) -> List[Meeting]:
+async def get_or_create_user_by_email(db: AsyncSession, email: str, name: str = "User") -> User:
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if not user:
+        user = User(email=email, name=name)
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+    return user
+
+
+async def get_upcoming_meetings(db: AsyncSession, user_id: int, email: Optional[str] = None) -> List[Meeting]:
     now = datetime.now(timezone.utc)
+    target_user_id = user_id
+    if email:
+        u = await get_or_create_user_by_email(db, email)
+        target_user_id = u.id
+
     result = await db.execute(
         select(Meeting)
         .where(
-            Meeting.host_id == user_id,
             Meeting.type == MeetingType.scheduled,
             Meeting.status == MeetingStatus.scheduled,
             Meeting.scheduled_start > now,
@@ -168,14 +183,13 @@ async def get_upcoming_meetings(db: AsyncSession, user_id: int) -> List[Meeting]
     return list(result.scalars().all())
 
 
-async def get_recent_meetings(db: AsyncSession, user_id: int) -> List[Meeting]:
-    result = await db.execute(
-        select(Meeting)
-        .where(Meeting.host_id == user_id)
-        .options(selectinload(Meeting.host), selectinload(Meeting.participants))
-        .order_by(Meeting.created_at.desc())
-        .limit(30)
-    )
+async def get_recent_meetings(db: AsyncSession, user_id: int, email: Optional[str] = None) -> List[Meeting]:
+    query = select(Meeting).options(selectinload(Meeting.host), selectinload(Meeting.participants)).order_by(Meeting.created_at.desc()).limit(30)
+    if email:
+        u = await get_or_create_user_by_email(db, email)
+        query = select(Meeting).where(Meeting.host_id == u.id).options(selectinload(Meeting.host), selectinload(Meeting.participants)).order_by(Meeting.created_at.desc()).limit(30)
+
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 

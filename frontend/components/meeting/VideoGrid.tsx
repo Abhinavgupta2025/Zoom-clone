@@ -52,11 +52,11 @@ export function VideoGrid({
       />
 
       {/* Remote participant tiles */}
-      {remoteParticipants.map(([participantId, streams]) => (
+      {remoteParticipants.map(([participantId, streams], index) => (
         <VideoTile
           key={participantId}
           stream={streams.videoStream}
-          displayName={`Participant ${participantId.slice(0, 5)}`}
+          displayName={`Participant ${index + 2}`}
           isMuted={!streams.audioStream}
           isVideoOff={!streams.videoStream}
         />

@@ -253,6 +253,8 @@ export default function MeetingRoomPage() {
           localMuted={isMuted}
           localVideoOff={isVideoOff}
           remoteTracks={remoteTracks}
+          participants={participants}
+          localParticipantId={participant?.participant_id}
         />
 
         {/* Slide-in Participant Sidebar */}

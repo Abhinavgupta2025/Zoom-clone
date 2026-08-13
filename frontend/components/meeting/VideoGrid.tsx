@@ -2,6 +2,7 @@
 
 import { VideoTile } from "./VideoTile";
 import { RemoteTrack } from "@/lib/mediasoupClient";
+import { Participant } from "@/types";
 
 interface VideoGridProps {
   localStream?: MediaStream | null;
@@ -9,6 +10,8 @@ interface VideoGridProps {
   localMuted: boolean;
   localVideoOff: boolean;
   remoteTracks: RemoteTrack[];
+  participants?: Participant[];
+  localParticipantId?: number;
 }
 
 export function VideoGrid({
@@ -17,24 +20,59 @@ export function VideoGrid({
   localMuted,
   localVideoOff,
   remoteTracks,
+  participants = [],
+  localParticipantId,
 }: VideoGridProps) {
-  // Group remote tracks by participantId
-  const participantMap = new Map<string, { videoStream?: MediaStream; audioStream?: MediaStream }>();
+  // Filter out local participant from DB room list
+  const remoteDbParticipants = participants.filter((p) => p.id !== localParticipantId);
 
+  // Group remote WebRTC tracks by participantId
+  const trackMap = new Map<string, { videoStream?: MediaStream; audioStream?: MediaStream }>();
   remoteTracks.forEach((rt) => {
-    const existing = participantMap.get(rt.participantId) || {};
-    if (rt.kind === "video") {
-      existing.videoStream = rt.stream;
-    } else if (rt.kind === "audio") {
-      existing.audioStream = rt.stream;
-    }
-    participantMap.set(rt.participantId, existing);
+    const existing = trackMap.get(rt.participantId) || {};
+    if (rt.kind === "video") existing.videoStream = rt.stream;
+    if (rt.kind === "audio") existing.audioStream = rt.stream;
+    trackMap.set(rt.participantId, existing);
   });
 
-  const remoteParticipants = Array.from(participantMap.entries());
-  const totalCount = 1 + remoteParticipants.length;
+  // Combine DB presence list with WebRTC streams
+  let displayRemoteList: Array<{
+    id: string;
+    displayName: string;
+    videoStream?: MediaStream;
+    audioStream?: MediaStream;
+    isMuted: boolean;
+  }> = [];
 
-  // Responsive grid class determination
+  if (remoteDbParticipants.length > 0) {
+    displayRemoteList = remoteDbParticipants.map((p, index) => {
+      const tracks = trackMap.get(p.id.toString()) || {};
+      const formattedName =
+        p.display_name.startsWith("Guest") || p.display_name.startsWith("Participant")
+          ? `Participant ${index + 2}`
+          : p.display_name;
+
+      return {
+        id: p.id.toString(),
+        displayName: formattedName,
+        videoStream: tracks.videoStream,
+        audioStream: tracks.audioStream,
+        isMuted: p.is_muted,
+      };
+    });
+  } else {
+    displayRemoteList = Array.from(trackMap.entries()).map(([id, tracks], index) => ({
+      id,
+      displayName: `Participant ${index + 2}`,
+      videoStream: tracks.videoStream,
+      audioStream: tracks.audioStream,
+      isMuted: !tracks.audioStream,
+    }));
+  }
+
+  const totalCount = 1 + displayRemoteList.length;
+
+  // Responsive grid layout calculation
   let gridColsClass = "grid-cols-1";
   if (totalCount === 2) gridColsClass = "grid-cols-1 md:grid-cols-2";
   else if (totalCount >= 3 && totalCount <= 4) gridColsClass = "grid-cols-2";
@@ -52,13 +90,13 @@ export function VideoGrid({
       />
 
       {/* Remote participant tiles */}
-      {remoteParticipants.map(([participantId, streams], index) => (
+      {displayRemoteList.map((item) => (
         <VideoTile
-          key={participantId}
-          stream={streams.videoStream}
-          displayName={`Participant ${index + 2}`}
-          isMuted={!streams.audioStream}
-          isVideoOff={!streams.videoStream}
+          key={item.id}
+          stream={item.videoStream}
+          displayName={item.displayName}
+          isMuted={item.isMuted}
+          isVideoOff={!item.videoStream}
         />
       ))}
     </div>

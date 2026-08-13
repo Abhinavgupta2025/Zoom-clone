@@ -1,0 +1,23 @@
+app = "zoom-mediasoup-sfu"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "4000"
+  LISTEN_IP = "0.0.0.0"
+  RTC_MIN_PORT = "10000"
+  RTC_MAX_PORT = "10100"
+
+[[services]]
+  internal_port = 4000
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443

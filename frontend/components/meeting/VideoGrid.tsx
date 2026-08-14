@@ -45,25 +45,20 @@ export function VideoGrid({
   }> = [];
 
   if (remoteDbParticipants.length > 0) {
-    displayRemoteList = remoteDbParticipants.map((p, index) => {
+    displayRemoteList = remoteDbParticipants.map((p) => {
       const tracks = trackMap.get(p.id.toString()) || {};
-      const formattedName =
-        p.display_name.startsWith("Guest") || p.display_name.startsWith("Participant")
-          ? `Participant ${index + 2}`
-          : p.display_name;
-
       return {
         id: p.id.toString(),
-        displayName: formattedName,
+        displayName: p.display_name || `Participant #${p.id}`,
         videoStream: tracks.videoStream,
         audioStream: tracks.audioStream,
         isMuted: p.is_muted,
       };
     });
   } else {
-    displayRemoteList = Array.from(trackMap.entries()).map(([id, tracks], index) => ({
+    displayRemoteList = Array.from(trackMap.entries()).map(([id, tracks]) => ({
       id,
-      displayName: `Participant ${index + 2}`,
+      displayName: `Participant #${id}`,
       videoStream: tracks.videoStream,
       audioStream: tracks.audioStream,
       isMuted: !tracks.audioStream,

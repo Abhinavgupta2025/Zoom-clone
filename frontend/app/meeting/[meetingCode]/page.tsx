@@ -8,7 +8,7 @@ import { ParticipantSidebar } from "@/components/meeting/ParticipantSidebar";
 import { api } from "@/lib/api";
 import { WebRTCClientManager, RemoteTrack } from "@/lib/webrtcClient";
 import { Participant } from "@/types";
-import { Copy, Check, ShieldAlert, Loader2 } from "lucide-react";
+import { Copy, Check, ShieldAlert, Loader2, Video, User as UserIcon } from "lucide-react";
 
 export default function MeetingRoom() {
   const params = useParams();
@@ -31,9 +31,46 @@ export default function MeetingRoom() {
   const [sfuConnected, setSfuConnected] = useState(false);
   const [sfuError, setSfuError] = useState<string | null>(null);
 
+  // Name Prompt Modal State
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [inputName, setInputName] = useState("");
+  const [hasSubmittedName, setHasSubmittedName] = useState(false);
+
   const rtcManagerRef = useRef<WebRTCClientManager | null>(null);
 
   useEffect(() => {
+    // Check if name is already set in localStorage or user profile
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("zoom_display_name");
+      const storedUser = localStorage.getItem("zoom_user");
+      if (stored) {
+        setInputName(stored);
+        setHasSubmittedName(true);
+      } else if (storedUser) {
+        try {
+          const u = JSON.parse(storedUser);
+          if (u.name) {
+            setInputName(u.name);
+            localStorage.setItem("zoom_display_name", u.name);
+            setHasSubmittedName(true);
+          } else {
+            setShowNameModal(true);
+          }
+        } catch (e) {
+          setShowNameModal(true);
+        }
+      } else {
+        setShowNameModal(true);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (showNameModal && !hasSubmittedName) {
+      setLoading(false);
+      return;
+    }
+
     let isMounted = true;
     let stream: MediaStream | null = null;
 
@@ -42,13 +79,13 @@ export default function MeetingRoom() {
         setLoading(true);
 
         // 1. Fetch meeting detail and join via REST
-        const meeting = await api.getMeeting(meetingCode);
-        const storedName =
-          typeof window !== "undefined"
+        const nameToUse =
+          inputName.trim() ||
+          (typeof window !== "undefined"
             ? localStorage.getItem("zoom_display_name") || "Guest"
-            : "Guest";
+            : "Guest");
 
-        const joinRes = await api.joinMeeting(meetingCode, storedName);
+        const joinRes = await api.joinMeeting(meetingCode, nameToUse);
 
         if (!isMounted) return;
 
@@ -122,7 +159,17 @@ export default function MeetingRoom() {
         stream.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [meetingCode, router]);
+  }, [meetingCode, router, hasSubmittedName]);
+
+  const handleNameSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputName.trim()) return;
+    if (typeof window !== "undefined") {
+      localStorage.setItem("zoom_display_name", inputName.trim());
+    }
+    setShowNameModal(false);
+    setHasSubmittedName(true);
+  };
 
   // Audio mute toggle
   const handleToggleAudio = () => {
@@ -176,6 +223,49 @@ export default function MeetingRoom() {
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
+
+  // Display Name Prompt Modal
+  if (showNameModal && !hasSubmittedName) {
+    return (
+      <div className="min-h-screen bg-[#101416] flex flex-col items-center justify-center text-white px-6 relative overflow-hidden">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-[#0E71EB]/20 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="w-full max-w-md bg-[#1D2022] border border-white/10 rounded-2xl p-8 shadow-2xl space-y-6 relative z-10">
+          <div className="text-center space-y-2">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#0E71EB] to-[#2D8CFF] flex items-center justify-center mx-auto shadow-lg shadow-[#0E71EB]/30">
+              <Video className="w-6 h-6 text-white" />
+            </div>
+            <h2 className="text-2xl font-bold text-white tracking-tight">Ready to join?</h2>
+            <p className="text-xs text-gray-400">Enter your display name for meeting code <span className="font-mono text-[#2D8CFF] font-semibold">{meetingCode}</span></p>
+          </div>
+
+          <form onSubmit={handleNameSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-gray-300">Your Name</label>
+              <div className="relative">
+                <UserIcon className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Abhinav Gupta"
+                  value={inputName}
+                  onChange={(e) => setInputName(e.target.value)}
+                  className="w-full bg-[#101416] border border-white/10 rounded-xl pl-10 pr-4 py-3 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#0E71EB] transition-colors"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-[#0E71EB] hover:bg-[#2D8CFF] text-white font-bold text-xs py-3.5 rounded-xl shadow-lg shadow-[#0E71EB]/25 flex items-center justify-center gap-2 hover:scale-[1.01] transition-all"
+            >
+              <span>Join Meeting Now</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

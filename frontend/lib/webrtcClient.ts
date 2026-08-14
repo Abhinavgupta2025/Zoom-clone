@@ -126,7 +126,6 @@ export class WebRTCClientManager {
   private getOrCreatePeerConnection(targetParticipantId: string): RTCPeerConnection {
     if (this.peerConnections.has(targetParticipantId)) {
       const existing = this.peerConnections.get(targetParticipantId)!;
-      // Ensure tracks are added if missing
       if (this.localStream && existing.getSenders().length === 0) {
         this.localStream.getTracks().forEach((track) => {
           existing.addTrack(track, this.localStream!);
@@ -161,9 +160,20 @@ export class WebRTCClientManager {
 
     // Capture remote stream when tracks arrive
     pc.ontrack = (event) => {
-      console.log("[WebRTC] Received remote track from:", targetParticipantId, event.track.kind);
-      const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-      this.remoteStreams.set(targetParticipantId, stream);
+      console.log("[WebRTC] Received remote track from peer:", targetParticipantId, event.track.kind);
+      let existingStream = this.remoteStreams.get(targetParticipantId);
+      if (!existingStream) {
+        existingStream = new MediaStream();
+      }
+      
+      // Add track if not already present
+      if (!existingStream.getTracks().some((t) => t.id === event.track.id)) {
+        existingStream.addTrack(event.track);
+      }
+
+      // Create a FRESH MediaStream instance to trigger React state re-render
+      const clonedStream = new MediaStream(existingStream.getTracks());
+      this.remoteStreams.set(targetParticipantId, clonedStream);
       this.notifyRemoteTracksChanged();
     };
 
@@ -196,8 +206,6 @@ export class WebRTCClientManager {
   private async handleOffer(senderParticipantId: string, sdp: RTCSessionDescriptionInit) {
     const pc = this.getOrCreatePeerConnection(senderParticipantId);
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-
-    // Process queued ICE candidates if any
     await this.flushQueuedIceCandidates(senderParticipantId, pc);
 
     const answer = await pc.createAnswer();
@@ -231,7 +239,6 @@ export class WebRTCClientManager {
         console.error("[WebRTC] Error adding ICE candidate:", e);
       }
     } else {
-      // Queue candidate until remoteDescription is set
       const queue = this.iceCandidatesQueue.get(senderParticipantId) || [];
       queue.push(candidate);
       this.iceCandidatesQueue.set(senderParticipantId, queue);

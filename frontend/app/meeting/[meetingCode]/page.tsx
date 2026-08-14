@@ -68,7 +68,7 @@ export default function MeetingRoomPage() {
           setIsMuted(true);
         }
 
-        // 2. Connect to SFU (mediasoup)
+        // 2. Connect to SFU (mediasoup) - updated connect signature
         const msManager = new MediasoupClientManager(
           meetingCode,
           p.participant_id.toString(),

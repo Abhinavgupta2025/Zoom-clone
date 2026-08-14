@@ -32,17 +32,9 @@ export class WebRTCClientManager {
 
   public connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      let apiBase = process.env.NEXT_PUBLIC_API_URL;
-      
-      if (!apiBase && typeof window !== "undefined") {
-        const isSecure = window.location.protocol === "https:";
-        const host = window.location.host;
-        apiBase = `${isSecure ? "https:" : "http:"}//${host}`;
-      } else if (!apiBase) {
-        apiBase = "http://localhost:8000";
-      }
-
+      let apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       apiBase = apiBase.replace(/\/+$/, "");
+      
       const wsProto = apiBase.startsWith("https") ? "wss:" : "ws:";
       const cleanHost = apiBase.replace(/^https?:\/\//, "");
       const wsUrl = `${wsProto}//${cleanHost}/ws/meetings/${this.meetingCode}`;
@@ -87,7 +79,7 @@ export class WebRTCClientManager {
 
     switch (type) {
       case "joined":
-        console.log("[WebRTC] Joined room. Existing peers:", existing_peers);
+        console.log("[WebRTC] Joined room. Existing peers in room:", existing_peers);
         // Create PeerConnections for existing peers and send Offer
         if (Array.isArray(existing_peers)) {
           for (const peerId of existing_peers) {
@@ -156,12 +148,8 @@ export class WebRTCClientManager {
     // Capture remote stream when tracks arrive
     pc.ontrack = (event) => {
       console.log("[WebRTC] Received remote track from:", targetParticipantId, event.track.kind);
-      let stream = this.remoteStreams.get(targetParticipantId);
-      if (!stream) {
-        stream = new MediaStream();
-        this.remoteStreams.set(targetParticipantId, stream);
-      }
-      stream.addTrack(event.track);
+      const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+      this.remoteStreams.set(targetParticipantId, stream);
       this.notifyRemoteTracksChanged();
     };
 

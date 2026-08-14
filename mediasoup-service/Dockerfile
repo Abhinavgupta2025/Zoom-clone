@@ -1,8 +1,10 @@
 FROM node:20-slim AS builder
 
-# Install minimal build tools required to compile mediasoup worker binary
+# Install build tools required by mediasoup worker (python3, python3-pip, python3-setuptools, make, g++)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
+    python3-pip \
+    python3-setuptools \
     make \
     g++ \
     && rm -rf /var/lib/apt/lists/*

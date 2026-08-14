@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -37,13 +37,12 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS
+# CORS (allow_credentials=False when allow_origins=["*"] for Starlette compatibility)
 # ---------------------------------------------------------------------------
-origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for dev & Vercel deployment
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

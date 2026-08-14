@@ -15,8 +15,9 @@ const ICE_SERVERS: RTCConfiguration = {
 
 export class WebRTCClientManager {
   private ws: WebSocket | null = null;
-  private peerConnections: Map<string, RTCPeerConnection> = new Map(); // targetParticipantId -> RTCPeerConnection
-  private remoteStreams: Map<string, MediaStream> = new Map(); // targetParticipantId -> MediaStream
+  private peerConnections: Map<string, RTCPeerConnection> = new Map();
+  private remoteStreams: Map<string, MediaStream> = new Map();
+  private iceCandidatesQueue: Map<string, RTCIceCandidateInit[]> = new Map();
   private onRemoteTracksCallback?: (tracks: RemoteTrack[]) => void;
 
   constructor(
@@ -30,47 +31,55 @@ export class WebRTCClientManager {
     this.onRemoteTracksCallback = cb;
   }
 
-  public connect(): Promise<void> {
+  public connect(retries = 3): Promise<void> {
     return new Promise((resolve, reject) => {
-      let apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      apiBase = apiBase.replace(/\/+$/, "");
-      
-      const wsProto = apiBase.startsWith("https") ? "wss:" : "ws:";
-      const cleanHost = apiBase.replace(/^https?:\/\//, "");
-      const wsUrl = `${wsProto}//${cleanHost}/ws/meetings/${this.meetingCode}`;
+      const attemptConnect = (remainingRetries: number) => {
+        let apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        apiBase = apiBase.replace(/\/+$/, "");
+        
+        const wsProto = apiBase.startsWith("https") ? "wss:" : "ws:";
+        const cleanHost = apiBase.replace(/^https?:\/\//, "");
+        const wsUrl = `${wsProto}//${cleanHost}/ws/meetings/${this.meetingCode}`;
 
-      console.log("[WebRTC] Connecting to signaling server:", wsUrl);
-      this.ws = new WebSocket(wsUrl);
+        console.log(`[WebRTC] Connecting to signaling server (${remainingRetries} attempts left):`, wsUrl);
+        this.ws = new WebSocket(wsUrl);
 
-      this.ws.onopen = () => {
-        console.log("[WebRTC] WebSocket open. Sending join...");
-        this.ws?.send(
-          JSON.stringify({
-            type: "join",
-            participant_id: this.participantId,
-            display_name: this.displayName,
-          })
-        );
-        resolve();
+        this.ws.onopen = () => {
+          console.log("[WebRTC] WebSocket open. Sending join...");
+          this.ws?.send(
+            JSON.stringify({
+              type: "join",
+              participant_id: this.participantId,
+              display_name: this.displayName,
+            })
+          );
+          resolve();
+        };
+
+        this.ws.onerror = (err) => {
+          console.warn("[WebRTC] WebSocket connection attempt failed:", err);
+          if (remainingRetries > 0) {
+            setTimeout(() => attemptConnect(remainingRetries - 1), 1500);
+          } else {
+            reject(err);
+          }
+        };
+
+        this.ws.onmessage = async (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            await this.handleSignalingMessage(data);
+          } catch (e) {
+            console.error("[WebRTC] Error handling message:", e);
+          }
+        };
+
+        this.ws.onclose = () => {
+          console.log("[WebRTC] WebSocket connection closed.");
+        };
       };
 
-      this.ws.onerror = (err) => {
-        console.error("[WebRTC] WebSocket error:", err);
-        reject(err);
-      };
-
-      this.ws.onmessage = async (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          await this.handleSignalingMessage(data);
-        } catch (e) {
-          console.error("[WebRTC] Error handling message:", e);
-        }
-      };
-
-      this.ws.onclose = () => {
-        console.log("[WebRTC] WebSocket closed.");
-      };
+      attemptConnect(retries);
     });
   }
 
@@ -79,8 +88,7 @@ export class WebRTCClientManager {
 
     switch (type) {
       case "joined":
-        console.log("[WebRTC] Joined room. Existing peers in room:", existing_peers);
-        // Create PeerConnections for existing peers and send Offer
+        console.log("[WebRTC] Joined room. Existing peers:", existing_peers);
         if (Array.isArray(existing_peers)) {
           for (const peerId of existing_peers) {
             await this.createOfferToPeer(peerId);
@@ -90,7 +98,6 @@ export class WebRTCClientManager {
 
       case "peer-joined":
         console.log("[WebRTC] New peer joined room:", participant_id);
-        // Create PeerConnection wrapper for new peer
         this.getOrCreatePeerConnection(participant_id);
         break;
 
@@ -118,7 +125,14 @@ export class WebRTCClientManager {
 
   private getOrCreatePeerConnection(targetParticipantId: string): RTCPeerConnection {
     if (this.peerConnections.has(targetParticipantId)) {
-      return this.peerConnections.get(targetParticipantId)!;
+      const existing = this.peerConnections.get(targetParticipantId)!;
+      // Ensure tracks are added if missing
+      if (this.localStream && existing.getSenders().length === 0) {
+        this.localStream.getTracks().forEach((track) => {
+          existing.addTrack(track, this.localStream!);
+        });
+      }
+      return existing;
     }
 
     console.log("[WebRTC] Creating RTCPeerConnection for target:", targetParticipantId);
@@ -165,7 +179,7 @@ export class WebRTCClientManager {
 
   private async createOfferToPeer(targetParticipantId: string) {
     const pc = this.getOrCreatePeerConnection(targetParticipantId);
-    const offer = await pc.createOffer();
+    const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
     await pc.setLocalDescription(offer);
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -182,6 +196,9 @@ export class WebRTCClientManager {
   private async handleOffer(senderParticipantId: string, sdp: RTCSessionDescriptionInit) {
     const pc = this.getOrCreatePeerConnection(senderParticipantId);
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+    // Process queued ICE candidates if any
+    await this.flushQueuedIceCandidates(senderParticipantId, pc);
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -201,17 +218,35 @@ export class WebRTCClientManager {
     const pc = this.peerConnections.get(senderParticipantId);
     if (pc) {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      await this.flushQueuedIceCandidates(senderParticipantId, pc);
     }
   }
 
   private async handleIceCandidate(senderParticipantId: string, candidate: RTCIceCandidateInit) {
     const pc = this.peerConnections.get(senderParticipantId);
-    if (pc && candidate) {
+    if (pc && pc.remoteDescription && pc.remoteDescription.type) {
       try {
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
         console.error("[WebRTC] Error adding ICE candidate:", e);
       }
+    } else {
+      // Queue candidate until remoteDescription is set
+      const queue = this.iceCandidatesQueue.get(senderParticipantId) || [];
+      queue.push(candidate);
+      this.iceCandidatesQueue.set(senderParticipantId, queue);
+    }
+  }
+
+  private async flushQueuedIceCandidates(senderParticipantId: string, pc: RTCPeerConnection) {
+    const queue = this.iceCandidatesQueue.get(senderParticipantId);
+    if (queue && queue.length > 0) {
+      for (const cand of queue) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(cand));
+        } catch (e) {}
+      }
+      this.iceCandidatesQueue.delete(senderParticipantId);
     }
   }
 
@@ -222,6 +257,7 @@ export class WebRTCClientManager {
       this.peerConnections.delete(participantId);
     }
     this.remoteStreams.delete(participantId);
+    this.iceCandidatesQueue.delete(participantId);
     this.notifyRemoteTracksChanged();
   }
 
@@ -248,6 +284,7 @@ export class WebRTCClientManager {
     this.peerConnections.forEach((pc) => pc.close());
     this.peerConnections.clear();
     this.remoteStreams.clear();
+    this.iceCandidatesQueue.clear();
     if (this.ws) {
       this.ws.close();
       this.ws = null;

@@ -77,16 +77,15 @@ export default function MeetingRoomPage() {
         mediasoupManagerRef.current = msManager;
 
         try {
-          await msManager.connect((updatedTracks) => {
+          msManager.onRemoteTracks((updatedTracks) => {
             setRemoteTracks(updatedTracks);
           });
+          await msManager.connect();
           setSfuConnected(true);
 
           // Produce local tracks if available
           if (stream) {
-            const audioTrack = stream.getAudioTracks()[0];
-            const videoTrack = stream.getVideoTracks()[0];
-            await msManager.produceTracks(audioTrack, videoTrack);
+            await msManager.produceLocalTracks(stream);
           }
         } catch (err: any) {
           console.warn("mediasoup SFU connection notice:", err.message);

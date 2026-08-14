@@ -1,3 +1,6 @@
+/**
+ * Dashboard page — Zoom Clone UI
+ */
 "use client";
 
 import { useEffect, useState } from "react";

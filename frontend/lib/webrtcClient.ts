@@ -32,10 +32,20 @@ export class WebRTCClientManager {
 
   public connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      let apiBase = process.env.NEXT_PUBLIC_API_URL;
+      
+      if (!apiBase && typeof window !== "undefined") {
+        const isSecure = window.location.protocol === "https:";
+        const host = window.location.host;
+        apiBase = `${isSecure ? "https:" : "http:"}//${host}`;
+      } else if (!apiBase) {
+        apiBase = "http://localhost:8000";
+      }
+
+      apiBase = apiBase.replace(/\/+$/, "");
       const wsProto = apiBase.startsWith("https") ? "wss:" : "ws:";
-      const host = apiBase.replace(/^https?:\/\//, "");
-      const wsUrl = `${wsProto}//${host}/ws/meetings/${this.meetingCode}`;
+      const cleanHost = apiBase.replace(/^https?:\/\//, "");
+      const wsUrl = `${wsProto}//${cleanHost}/ws/meetings/${this.meetingCode}`;
 
       console.log("[WebRTC] Connecting to signaling server:", wsUrl);
       this.ws = new WebSocket(wsUrl);

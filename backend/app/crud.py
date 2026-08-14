@@ -310,12 +310,23 @@ async def get_active_participants(
     db: AsyncSession, meeting_id: int
 ) -> List[Participant]:
     result = await db.execute(
-        select(Participant).where(
+        select(Participant)
+        .where(
             Participant.meeting_id == meeting_id,
             Participant.left_at.is_(None),
         )
+        .order_by(Participant.id.desc())
     )
-    return list(result.scalars().all())
+    raw_list = list(result.scalars().all())
+    
+    # Deduplicate by display_name keeping the most recent active row
+    seen_names = set()
+    unique_list = []
+    for p in raw_list:
+        if p.display_name not in seen_names:
+            seen_names.add(p.display_name)
+            unique_list.append(p)
+    return unique_list[::-1]
 
 
 async def mute_all_participants(

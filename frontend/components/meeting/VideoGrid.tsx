@@ -35,7 +35,12 @@ export function VideoGrid({
     trackMap.set(rt.participantId, existing);
   });
 
-  // Combine DB presence list with WebRTC streams
+  // Map participant ID -> Display Name
+  const participantNameMap = new Map<string, string>();
+  participants.forEach((p) => {
+    participantNameMap.set(p.id.toString(), p.display_name);
+  });
+
   let displayRemoteList: Array<{
     id: string;
     displayName: string;
@@ -44,24 +49,33 @@ export function VideoGrid({
     isMuted: boolean;
   }> = [];
 
-  if (remoteDbParticipants.length > 0) {
-    displayRemoteList = remoteDbParticipants.map((p) => {
-      const tracks = trackMap.get(p.id.toString()) || {};
+  if (trackMap.size > 0) {
+    // Driven by ACTUAL connected WebRTC peer streams
+    displayRemoteList = Array.from(trackMap.entries()).map(([pId, tracks]) => {
+      const dbName = participantNameMap.get(pId);
       return {
-        id: p.id.toString(),
-        displayName: p.display_name || `Participant #${p.id}`,
+        id: pId,
+        displayName: dbName || `Guest (${pId})`,
         videoStream: tracks.videoStream,
         audioStream: tracks.audioStream,
-        isMuted: p.is_muted,
+        isMuted: false,
       };
     });
   } else {
-    displayRemoteList = Array.from(trackMap.entries()).map(([id, tracks]) => ({
-      id,
-      displayName: `Participant #${id}`,
-      videoStream: tracks.videoStream,
-      audioStream: tracks.audioStream,
-      isMuted: !tracks.audioStream,
+    // Driven by unique active DB participants
+    const seenNames = new Set<string>();
+    const uniqueParticipants = remoteDbParticipants.filter((p) => {
+      if (seenNames.has(p.display_name)) return false;
+      seenNames.add(p.display_name);
+      return true;
+    });
+
+    displayRemoteList = uniqueParticipants.map((p) => ({
+      id: p.id.toString(),
+      displayName: p.display_name,
+      videoStream: undefined,
+      audioStream: undefined,
+      isMuted: p.is_muted,
     }));
   }
 

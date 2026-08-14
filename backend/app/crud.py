@@ -2,6 +2,9 @@ from __future__ import annotations
 
 """CRUD helpers — all DB operations live here, routers stay thin."""
 
+import hashlib
+import os
+import secrets
 from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 
@@ -14,11 +17,70 @@ from app.shorturl import generate_meeting_code, strip_dashes
 
 
 # ---------------------------------------------------------------------------
-# User
+# Password Hashing & Verification
+# ---------------------------------------------------------------------------
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
+    return f"{salt.hex()}:${key.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        salt_hex, key_hex = stored_hash.split("$")
+        salt = bytes.fromhex(salt_hex)
+        key = bytes.fromhex(key_hex)
+        new_key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
+        return secrets.compare_digest(key, new_key)
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# User CRUD & Auth
 # ---------------------------------------------------------------------------
 async def get_user(db: AsyncSession, user_id: int) -> Optional[User]:
     result = await db.execute(select(User).where(User.id == user_id))
     return result.scalar_one_or_none()
+
+
+async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
+    result = await db.execute(select(User).where(User.email == email.lower().strip()))
+    return result.scalar_one_or_none()
+
+
+async def create_user(
+    db: AsyncSession, name: str, email: str, password: str
+) -> User:
+    user = User(
+        name=name.strip(),
+        email=email.lower().strip(),
+        password_hash=hash_password(password),
+        is_guest=False,
+        avatar_url=f"https://api.dicebear.com/7.x/avataaars/svg?seed={name.strip()}",
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def create_guest_user(db: AsyncSession) -> User:
+    guest_num = secrets.randbelow(9000) + 1000
+    guest_name = f"Guest #{guest_num}"
+    guest_email = f"guest_{secrets.token_hex(4)}@guest.zoom"
+
+    user = User(
+        name=guest_name,
+        email=guest_email,
+        password_hash=None,
+        is_guest=True,
+        avatar_url=f"https://api.dicebear.com/7.x/bottts/svg?seed={guest_name}",
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -152,27 +214,12 @@ async def get_meeting_by_code(db: AsyncSession, meeting_code: str) -> Optional[M
     return result.scalar_one_or_none()
 
 
-async def get_or_create_user_by_email(db: AsyncSession, email: str, name: str = "User") -> User:
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
-    if not user:
-        user = User(email=email, name=name)
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-    return user
-
-
-async def get_upcoming_meetings(db: AsyncSession, user_id: int, email: Optional[str] = None) -> List[Meeting]:
+async def get_upcoming_meetings(db: AsyncSession, user_id: int) -> List[Meeting]:
     now = datetime.now(timezone.utc)
-    target_user_id = user_id
-    if email:
-        u = await get_or_create_user_by_email(db, email)
-        target_user_id = u.id
-
     result = await db.execute(
         select(Meeting)
         .where(
+            Meeting.host_id == user_id,
             Meeting.type == MeetingType.scheduled,
             Meeting.status == MeetingStatus.scheduled,
             Meeting.scheduled_start > now,
@@ -183,13 +230,14 @@ async def get_upcoming_meetings(db: AsyncSession, user_id: int, email: Optional[
     return list(result.scalars().all())
 
 
-async def get_recent_meetings(db: AsyncSession, user_id: int, email: Optional[str] = None) -> List[Meeting]:
-    query = select(Meeting).options(selectinload(Meeting.host), selectinload(Meeting.participants)).order_by(Meeting.created_at.desc()).limit(30)
-    if email:
-        u = await get_or_create_user_by_email(db, email)
-        query = select(Meeting).where(Meeting.host_id == u.id).options(selectinload(Meeting.host), selectinload(Meeting.participants)).order_by(Meeting.created_at.desc()).limit(30)
-
-    result = await db.execute(query)
+async def get_recent_meetings(db: AsyncSession, user_id: int) -> List[Meeting]:
+    result = await db.execute(
+        select(Meeting)
+        .where(Meeting.host_id == user_id)
+        .options(selectinload(Meeting.host), selectinload(Meeting.participants))
+        .order_by(Meeting.created_at.desc())
+        .limit(30)
+    )
     return list(result.scalars().all())
 
 

@@ -111,13 +111,6 @@ async def schedule_meeting(
     return MeetingOut.model_validate(meeting)
 
 
-# ---------------------------------------------------------------------------
-# POST /api/users (Lightweight email authentication / user lookup)
-# ---------------------------------------------------------------------------
-@router.post("/users", response_model=schemas.UserOut)
-async def get_or_create_user(body: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
-    user = await crud.get_or_create_user_by_email(db, email=body.email, name=body.name or "User")
-    return UserOut.model_validate(user)
 
 
 # ---------------------------------------------------------------------------

@@ -151,10 +151,14 @@ async def seed(db: AsyncSession) -> None:
     print("✅ Database seeded successfully.")
 
 
-async def main() -> None:
-    await init_db()
+async def seed_db() -> None:
     async with AsyncSessionLocal() as db:
         await seed(db)
+
+
+async def main() -> None:
+    await init_db()
+    await seed_db()
 
 
 if __name__ == "__main__":

@@ -1,115 +1,86 @@
 from __future__ import annotations
 
-"""FastAPI application entry point."""
-
-
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from app.cache import cache
 from app.config import settings
 from app.database import init_db
 from app.rate_limit import rate_limiter
-from app.routers import meetings, websocket
-from app.seed import seed
-from app.database import AsyncSessionLocal
+from app.routers import auth, meetings, websocket
+from app.seed import seed_db
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.main")
 
 
-# ---------------------------------------------------------------------------
-# Lifespan — startup + shutdown
-# ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Starting up — initialising DB and Redis...")
+    """Initialise DB tables and seed default user data on startup."""
+    logger.info("Initializing database schema...")
     await init_db()
-    await cache.connect()
-
-    async with AsyncSessionLocal() as db:
-        await seed(db)
-
+    logger.info("Seeding database with initial data...")
+    await seed_db()
+    logger.info("Startup complete.")
     yield
 
-    # Shutdown
-    logger.info("Shutting down...")
-    await cache.disconnect()
 
-
-# ---------------------------------------------------------------------------
-# App
-# ---------------------------------------------------------------------------
 app = FastAPI(
-    title="Zoom Clone API",
-    description="REST + WebSocket API for the Zoom Clone app",
+    title=settings.PROJECT_NAME,
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
-# Robust CORS + Rate Limit Middleware
+# CORS
+# ---------------------------------------------------------------------------
+origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for dev & Vercel deployment
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Token Bucket Rate Limiting Middleware
 # ---------------------------------------------------------------------------
 @app.middleware("http")
-async def cors_and_rate_limit_middleware(request: Request, call_next):
-    origin = request.headers.get("origin", "*")
+async def rate_limit_middleware(request: Request, call_next):
+    # Bypass health check, docs, and websocket from rate limit
+    path = request.url.path
+    if path in ("/", "/health", "/docs", "/openapi.json") or path.startswith("/ws"):
+        return await call_next(request)
 
-    # 1. Direct OPTIONS preflight handler
-    if request.method == "OPTIONS":
-        return Response(
-            status_code=200,
-            headers={
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-                "Access-Control-Allow-Headers": "*",
-                "Access-Control-Allow-Credentials": "true",
-            },
-        )
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
 
-    # 2. Skip rate limiting for meta endpoints
-    if request.url.path in ("/", "/docs", "/redoc", "/openapi.json", "/health"):
-        response = await call_next(request)
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        return response
-
-    # 3. Token bucket rate limiter check
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
-        request.client.host if request.client else "unknown"
-    )
-
-    allowed, retry_after, remaining, capacity = await rate_limiter.check(ip, request.url.path)
-
+    allowed, retry_after, remaining, capacity = await rate_limiter.check(client_ip, path)
     if not allowed:
-        return Response(
-            content=f'{{"detail":"Too many requests. Retry after {retry_after:.1f}s."}}',
+        logger.warning(f"Rate limit exceeded for IP: {client_ip} on path: {path}")
+        return JSONResponse(
             status_code=429,
-            media_type="application/json",
-            headers={
-                "Retry-After": str(int(retry_after) + 1),
-                "X-RateLimit-Limit": str(capacity),
-                "X-RateLimit-Remaining": "0",
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Credentials": "true",
-            },
+            content={"detail": f"Too many requests. Please retry in {retry_after:.1f}s."},
+            headers={"Retry-After": str(int(retry_after) + 1)},
         )
 
     response = await call_next(request)
-    response.headers["Access-Control-Allow-Origin"] = origin
-    response.headers["Access-Control-Allow-Credentials"] = "true"
-    response.headers["X-RateLimit-Limit"] = str(capacity)
-    response.headers["X-RateLimit-Remaining"] = str(remaining)
     return response
 
 
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
+app.include_router(auth.router)
 app.include_router(meetings.router)
 app.include_router(websocket.router)
 

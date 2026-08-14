@@ -3,23 +3,36 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.models import MeetingStatus, MeetingType
 
 
 # ---------------------------------------------------------------------------
-# User
+# Auth & User
 # ---------------------------------------------------------------------------
-class UserCreate(BaseModel):
-    email: str
-    name: Optional[str] = "User"
+class UserSignUp(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=6, max_length=100)
+
+
+class UserLogin(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=1, max_length=100)
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
 
 
 class UserOut(BaseModel):
     id: int
     name: str
     email: str
+    is_guest: bool = False
     avatar_url: Optional[str] = None
     created_at: datetime
 

@@ -1,9 +1,35 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Video, User as UserIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { User } from "@/types";
+import { Video, User as UserIcon, LogOut, LogIn } from "lucide-react";
 
 export function Navbar() {
+  const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("zoom_user");
+      if (stored) {
+        try {
+          setCurrentUser(JSON.parse(stored));
+        } catch (e) {}
+      }
+    }
+  }, []);
+
+  const handleLogout = () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("zoom_token");
+      localStorage.removeItem("zoom_user");
+    }
+    setCurrentUser(null);
+    router.push("/login");
+  };
+
   return (
     <header className="h-16 border-b border-white/10 bg-[#101416]/90 backdrop-blur-xl sticky top-0 z-50 px-6 flex items-center justify-between">
       <Link href="/" className="flex items-center gap-3 group">
@@ -44,13 +70,45 @@ export function Navbar() {
         </nav>
 
         <div className="flex items-center gap-3 border-l border-white/10 pl-4">
-          <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#0E71EB] to-indigo-600 flex items-center justify-center text-white font-bold text-xs shadow-md border border-white/10">
-            <UserIcon className="w-4 h-4" />
-          </div>
-          <div className="hidden sm:block text-left">
-            <p className="text-xs font-semibold text-white leading-tight">Default User</p>
-            <p className="text-[10px] text-gray-400">you@example.com</p>
-          </div>
+          {currentUser ? (
+            <>
+              <div className="flex items-center gap-2.5">
+                {currentUser.avatar_url ? (
+                  <img
+                    src={currentUser.avatar_url}
+                    alt={currentUser.name}
+                    className="w-9 h-9 rounded-full bg-[#0E71EB]/20 border border-white/10"
+                  />
+                ) : (
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#0E71EB] to-indigo-600 flex items-center justify-center text-white font-bold text-xs shadow-md border border-white/10">
+                    <UserIcon className="w-4 h-4" />
+                  </div>
+                )}
+                <div className="hidden sm:block text-left">
+                  <p className="text-xs font-semibold text-white leading-tight">
+                    {currentUser.name} {currentUser.is_guest && <span className="text-[10px] text-green-400 font-mono">(Guest)</span>}
+                  </p>
+                  <p className="text-[10px] text-gray-400 truncate max-w-[120px]">{currentUser.email}</p>
+                </div>
+              </div>
+
+              <button
+                onClick={handleLogout}
+                title="Log Out"
+                className="p-2 rounded-xl bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 border border-white/10 transition-colors ml-1"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </>
+          ) : (
+            <Link
+              href="/login"
+              className="bg-[#0E71EB] hover:bg-[#2D8CFF] text-white text-xs font-semibold px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-md transition-colors"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Sign In</span>
+            </Link>
+          )}
         </div>
       </div>
     </header>

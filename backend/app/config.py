@@ -4,8 +4,8 @@ import os
 from pydantic_settings import BaseSettings
 
 
-
 class Settings(BaseSettings):
+    PROJECT_NAME: str = "Zoom Clone Backend"
     DATABASE_URL: str = "sqlite+aiosqlite:///./meetings.db"
     REDIS_URL: str = "redis://localhost:6379/0"
     CORS_ORIGINS: str = "https://zoom-clone-amber-three.vercel.app,http://localhost:3000,http://localhost:3001"

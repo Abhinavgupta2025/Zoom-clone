@@ -29,6 +29,14 @@ export default function Dashboard() {
   const [quickCode, setQuickCode] = useState("");
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("zoom_token");
+      if (!token) {
+        router.push("/login");
+        return;
+      }
+    }
+
     async function loadData() {
       try {
         const [upcomingData, recentData] = await Promise.all([
@@ -44,7 +52,7 @@ export default function Dashboard() {
       }
     }
     loadData();
-  }, []);
+  }, [router]);
 
   const handleStartInstant = async () => {
     try {

@@ -5,8 +5,26 @@ export interface User {
   id: number;
   name: string;
   email: string;
+  is_guest?: boolean;
   avatar_url?: string;
   created_at: string;
+}
+
+export interface UserSignUpPayload {
+  name: string;
+  email: string;
+  password: string;
+}
+
+export interface UserLoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+  user: User;
 }
 
 export interface Meeting {

@@ -7,7 +7,7 @@ Handles room presence, WebRTC SDP offers/answers, and ICE candidates.
 
 import json
 import logging
-from typing import Dict, Set
+from typing import Dict
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -22,12 +22,11 @@ class ConnectionManager:
         # meeting_code -> dict of participant_id -> WebSocket
         self.rooms: Dict[str, Dict[str, WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, meeting_code: str, participant_id: str):
-        await websocket.accept()
+    def register_peer(self, websocket: WebSocket, meeting_code: str, participant_id: str):
         if meeting_code not in self.rooms:
             self.rooms[meeting_code] = {}
         self.rooms[meeting_code][participant_id] = websocket
-        logger.info(f"[WS] Peer {participant_id} joined room {meeting_code}. Total peers: {len(self.rooms[meeting_code])}")
+        logger.info(f"[WS] Peer {participant_id} registered in room {meeting_code}. Total peers: {len(self.rooms[meeting_code])}")
 
     def disconnect(self, meeting_code: str, participant_id: str):
         if meeting_code in self.rooms and participant_id in self.rooms[meeting_code]:
@@ -39,7 +38,10 @@ class ConnectionManager:
     async def send_to_peer(self, meeting_code: str, target_participant_id: str, message: dict):
         if meeting_code in self.rooms and target_participant_id in self.rooms[meeting_code]:
             ws = self.rooms[meeting_code][target_participant_id]
-            await ws.send_text(json.dumps(message))
+            try:
+                await ws.send_text(json.dumps(message))
+            except Exception as e:
+                logger.error(f"[WS] Error sending to {target_participant_id}: {e}")
 
     async def broadcast_to_room(self, meeting_code: str, message: dict, exclude_participant_id: str = None):
         if meeting_code not in self.rooms:
@@ -64,6 +66,8 @@ manager = ConnectionManager()
 
 @router.websocket("/meetings/{meeting_code}")
 async def meeting_signaling(websocket: WebSocket, meeting_code: str):
+    # MUST accept WebSocket handshake first before receiving text!
+    await websocket.accept()
     participant_id: str = None
 
     try:
@@ -75,7 +79,7 @@ async def meeting_signaling(websocket: WebSocket, meeting_code: str):
             participant_id = str(init_data.get("participant_id"))
             display_name = init_data.get("display_name", "Guest")
 
-            await manager.connect(websocket, meeting_code, participant_id)
+            manager.register_peer(websocket, meeting_code, participant_id)
 
             # Get list of existing peers in the room
             existing_peers = manager.get_existing_peers(meeting_code, participant_id)
@@ -98,7 +102,7 @@ async def meeting_signaling(websocket: WebSocket, meeting_code: str):
                 exclude_participant_id=participant_id,
             )
 
-        # Message loop for WebRTC signaling (Offer, Answer, ICE candidate)
+        # Main message loop for WebRTC signaling (Offer, Answer, ICE candidate)
         while True:
             data_raw = await websocket.receive_text()
             data = json.loads(data_raw)
@@ -106,12 +110,10 @@ async def meeting_signaling(websocket: WebSocket, meeting_code: str):
 
             if msg_type in ("offer", "answer", "ice-candidate"):
                 target_id = str(data.get("target_participant_id"))
-                # Relay signal directly to the target peer
                 data["sender_participant_id"] = participant_id
                 await manager.send_to_peer(meeting_code, target_id, data)
 
             elif msg_type == "state-update":
-                # Broadcast audio mute or video off toggle state to all peers
                 data["sender_participant_id"] = participant_id
                 await manager.broadcast_to_room(meeting_code, data, exclude_participant_id=participant_id)
 

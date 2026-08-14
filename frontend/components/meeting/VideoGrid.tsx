@@ -1,7 +1,7 @@
 "use client";
 
 import { VideoTile } from "./VideoTile";
-import { RemoteTrack } from "@/lib/mediasoupClient";
+import { RemoteTrack } from "@/lib/webrtcClient";
 import { Participant } from "@/types";
 
 interface VideoGridProps {

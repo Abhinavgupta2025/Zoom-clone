@@ -1,282 +1,260 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { VideoGrid } from "@/components/meeting/VideoGrid";
 import { ControlBar } from "@/components/meeting/ControlBar";
 import { ParticipantSidebar } from "@/components/meeting/ParticipantSidebar";
-import { MediasoupClientManager, RemoteTrack } from "@/lib/mediasoupClient";
 import { api } from "@/lib/api";
-import { Participant, JoinResponse } from "@/types";
-import { Loader2, AlertTriangle } from "lucide-react";
+import { WebRTCClientManager, RemoteTrack } from "@/lib/webrtcClient";
+import { Participant } from "@/types";
+import { Copy, Check, ShieldAlert, Loader2 } from "lucide-react";
 
-const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
-
-export default function MeetingRoomPage() {
-  const router = useRouter();
+export default function MeetingRoom() {
   const params = useParams();
+  const router = useRouter();
   const meetingCode = params.meetingCode as string;
 
-  const [participant, setParticipant] = useState<JoinResponse | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteTracks, setRemoteTracks] = useState<RemoteTrack[]>([]);
-  const [participants, setParticipants] = useState<Participant[]>([]);
-
+  const [localDisplayName, setLocalDisplayName] = useState("Guest");
+  const [localParticipantId, setLocalParticipantId] = useState<number | undefined>();
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isHost, setIsHost] = useState(false);
+
+  const [remoteTracks, setRemoteTracks] = useState<RemoteTrack[]>([]);
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [copiedLink, setCopiedLink] = useState(false);
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sfuConnected, setSfuConnected] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [sfuConnected, setSfuConnected] = useState(false);
   const [sfuError, setSfuError] = useState<string | null>(null);
 
-  const mediasoupManagerRef = useRef<MediasoupClientManager | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const rtcManagerRef = useRef<WebRTCClientManager | null>(null);
 
-  // 1. Initialise participant info & media
   useEffect(() => {
-    async function initRoom() {
+    let isMounted = true;
+    let stream: MediaStream | null = null;
+
+    async function initMeeting() {
       try {
-        // Load stored participant info or auto-join as guest
-        const storedPart = sessionStorage.getItem(`participant_${meetingCode}`);
-        let p: JoinResponse;
-        if (storedPart) {
-          p = JSON.parse(storedPart);
-        } else {
-          p = await api.joinMeeting(meetingCode, "Guest User");
-        }
-        setParticipant(p);
+        setLoading(true);
 
-        // Load media preferences from lobby
-        const storedMedia = sessionStorage.getItem(`media_settings_${meetingCode}`);
-        if (storedMedia) {
-          const { isMuted: m, isVideoOff: v } = JSON.parse(storedMedia);
-          setIsMuted(m);
-          setIsVideoOff(v);
-        }
+        // 1. Fetch meeting detail and join via REST
+        const meeting = await api.getMeeting(meetingCode);
+        const storedName =
+          typeof window !== "undefined"
+            ? localStorage.getItem("zoom_display_name") || "Guest"
+            : "Guest";
 
-        // Get local media stream
-        let stream: MediaStream | null = null;
+        const joinRes = await api.joinMeeting(meetingCode, storedName);
+
+        if (!isMounted) return;
+
+        setLocalDisplayName(joinRes.display_name);
+        setLocalParticipantId(joinRes.participant_id);
+        setIsHost(joinRes.is_host);
+
+        // 2. Access local user camera/mic stream
         try {
           stream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: true,
           });
-          setLocalStream(stream);
+          if (isMounted) setLocalStream(stream);
         } catch (mediaErr) {
           console.warn("Media devices not accessible:", mediaErr);
-          setIsVideoOff(true);
-          setIsMuted(true);
+          if (isMounted) {
+            setIsVideoOff(true);
+            setIsMuted(true);
+          }
         }
 
-        // 2. Connect to SFU (mediasoup) - updated connect signature
-        const msManager = new MediasoupClientManager(
+        // 3. Connect WebRTC signaling manager
+        const rtcManager = new WebRTCClientManager(
           meetingCode,
-          p.participant_id.toString(),
-          p.display_name
+          joinRes.participant_id.toString(),
+          joinRes.display_name,
+          stream
         );
-        mediasoupManagerRef.current = msManager;
+        rtcManagerRef.current = rtcManager;
+
+        rtcManager.onRemoteTracks((updatedTracks) => {
+          if (isMounted) setRemoteTracks(updatedTracks);
+        });
 
         try {
-          msManager.onRemoteTracks((updatedTracks) => {
-            setRemoteTracks(updatedTracks);
-          });
-          await msManager.connect();
-          setSfuConnected(true);
-
-          // Produce local tracks if available
-          if (stream) {
-            await msManager.produceLocalTracks(stream);
-          }
+          await rtcManager.connect();
+          if (isMounted) setSfuConnected(true);
         } catch (err: any) {
-          console.warn("mediasoup SFU connection notice:", err.message);
-          setSfuError("Running in local fallback mode (SFU server not connected)");
+          console.warn("WebRTC signaling connection notice:", err.message);
+          if (isMounted) setSfuError("Running in WebRTC peer mode");
         }
 
-        // 3. Connect to FastAPI WS presence channel
-        const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-        const host = typeof window !== "undefined" ? window.location.host : "localhost:8000";
-        const wsUrl = process.env.NEXT_PUBLIC_WS_URL || `${protocol}//${host}`;
-        const ws = new WebSocket(`${wsUrl}/ws/meetings/${meetingCode}`);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          ws.send(
-            JSON.stringify({
-              event: "joined",
-              participant_id: p.participant_id,
-              display_name: p.display_name,
-              is_host: p.is_host,
-            })
-          );
-        };
-
-        ws.onmessage = (event) => {
+        // 4. Poll active room participants list
+        const pollInterval = setInterval(async () => {
+          if (!isMounted) return;
           try {
-            const data = JSON.parse(event.data);
-            if (data.event === "init") {
-              setParticipants(data.participants);
-            } else if (data.event === "participant_joined") {
-              setParticipants((prev) => {
-                if (prev.some((item) => item.id === data.participant.id)) return prev;
-                return [...prev, data.participant];
-              });
-            } else if (data.event === "participant_left") {
-              setParticipants((prev) => prev.filter((item) => item.id !== data.participant_id));
-            } else if (data.event === "participant_muted") {
-              setParticipants((prev) =>
-                prev.map((item) =>
-                  item.id === data.participant_id ? { ...item, is_muted: data.is_muted } : item
-                )
-              );
-            }
-          } catch (e) {
-            console.error("WS message parse error:", e);
-          }
-        };
+            const list = await api.getParticipants(meetingCode);
+            setParticipants(list);
+          } catch (e) {}
+        }, 3000);
 
-        setLoading(false);
+        return () => clearInterval(pollInterval);
       } catch (err: any) {
-        console.error("Room initialization failed:", err);
-        router.push(`/meeting/${meetingCode}/lobby`);
+        console.error("Failed to initialize meeting room:", err);
+        alert(err.message || "Failed to join meeting");
+        router.push("/");
+      } finally {
+        if (isMounted) setLoading(false);
       }
     }
 
-    initRoom();
-
-    // 4. Polling fallback to keep participant list fresh
-    const pollInterval = setInterval(async () => {
-      try {
-        const activeParts = await api.getParticipants(meetingCode);
-        if (activeParts && activeParts.length > 0) {
-          setParticipants(activeParts);
-        }
-      } catch (pollErr) {
-        // Silent fail on background poll
-      }
-    }, 3000);
+    initMeeting();
 
     return () => {
-      clearInterval(pollInterval);
-      mediasoupManagerRef.current?.disconnect();
-      if (wsRef.current) {
-        wsRef.current.close();
+      isMounted = false;
+      if (rtcManagerRef.current) {
+        rtcManagerRef.current.disconnect();
       }
-      localStream?.getTracks().forEach((t) => t.stop());
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
     };
-  }, [meetingCode]);
+  }, [meetingCode, router]);
 
-  // Handle local track toggle
-  const handleToggleMute = () => {
-    const nextMuted = !isMuted;
+  // Audio mute toggle
+  const handleToggleAudio = () => {
     if (localStream) {
-      localStream.getAudioTracks().forEach((track) => {
-        track.enabled = !nextMuted;
-      });
-    }
-    mediasoupManagerRef.current?.toggleAudio(!nextMuted);
-    setIsMuted(nextMuted);
-
-    if (wsRef.current && participant) {
-      wsRef.current.send(
-        JSON.stringify({
-          event: "muted",
-          participant_id: participant.participant_id,
-          is_muted: nextMuted,
-        })
-      );
-    }
-  };
-
-  const handleToggleVideo = () => {
-    const nextVideoOff = !isVideoOff;
-    if (localStream) {
-      localStream.getVideoTracks().forEach((track) => {
-        track.enabled = !nextVideoOff;
-      });
-    }
-    mediasoupManagerRef.current?.toggleVideo(!nextVideoOff);
-    setIsVideoOff(nextVideoOff);
-  };
-
-  const handleLeave = async () => {
-    if (participant) {
-      await api.leaveMeeting(meetingCode, participant.participant_id).catch(() => {});
-      if (wsRef.current) {
-        wsRef.current.send(
-          JSON.stringify({
-            event: "left",
-            participant_id: participant.participant_id,
-          })
-        );
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMuted(!audioTrack.enabled);
       }
+    }
+  };
+
+  // Video toggle
+  const handleToggleVideo = () => {
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsVideoOff(!videoTrack.enabled);
+      }
+    }
+  };
+
+  // Leave meeting
+  const handleLeaveMeeting = async () => {
+    if (localParticipantId) {
+      try {
+        await api.leaveMeeting(meetingCode, localParticipantId);
+      } catch (err) {}
     }
     router.push("/");
   };
 
-  // Host Controls
+  // Host Mute All
   const handleMuteAll = async () => {
-    await api.muteAll(meetingCode).catch(() => {});
+    try {
+      await api.muteAll(meetingCode);
+      alert("All participants muted");
+    } catch (err) {}
   };
 
-  const handleRemoveParticipant = async (id: number) => {
-    await api.removeParticipant(meetingCode, id).catch(() => {});
+  // Host Remove Participant
+  const handleRemoveParticipant = async (pId: number) => {
+    try {
+      await api.removeParticipant(meetingCode, pId);
+    } catch (err) {}
+  };
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(window.location.href);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   if (loading) {
     return (
-      <div className="h-screen bg-zoom-darkBg flex items-center justify-center text-zoom-textMuted gap-3">
-        <Loader2 className="w-6 h-6 animate-spin text-zoom-blue" />
-        <span className="text-sm">Connecting to meeting...</span>
+      <div className="min-h-screen bg-[#101416] flex flex-col items-center justify-center text-white gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-[#0E71EB]" />
+        <p className="text-xs font-semibold text-gray-300">Connecting to meeting room...</p>
       </div>
     );
   }
 
   return (
-    <div className="h-screen flex flex-col bg-zoom-darkBg overflow-hidden">
-      {/* Fallback Banner Notice if SFU is offline */}
-      {sfuError && (
-        <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 flex items-center justify-between text-xs text-amber-300">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400" />
-            <span>{sfuError}</span>
-          </div>
-          <span className="text-[10px] bg-amber-500/20 px-2 py-0.5 rounded font-mono">Local Preview Active</span>
+    <div className="relative w-screen h-screen bg-[#101416] overflow-hidden flex flex-col justify-between">
+      {/* Top Header Bar */}
+      <header className="h-14 border-b border-white/10 px-6 flex items-center justify-between bg-[#101416]/90 backdrop-blur-md z-20">
+        <div className="flex items-center gap-3">
+          <span className="font-extrabold text-lg text-white tracking-tight">zoom</span>
+          <span className="text-gray-500">|</span>
+          <span className="text-xs text-gray-300 font-mono">Code: {meetingCode}</span>
+          <button
+            onClick={handleCopyCode}
+            className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+            title="Copy Invite Link"
+          >
+            {copiedLink ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
         </div>
-      )}
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden relative">
-        <VideoGrid
-          localStream={localStream}
-          localDisplayName={participant?.display_name || "You"}
-          localMuted={isMuted}
-          localVideoOff={isVideoOff}
-          remoteTracks={remoteTracks}
-          participants={participants}
-          localParticipantId={participant?.participant_id}
-        />
+        <div className="flex items-center gap-2">
+          {sfuConnected ? (
+            <span className="text-[10px] bg-green-500/10 text-green-400 border border-green-500/30 px-2.5 py-1 rounded-full font-semibold flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              Live WebRTC Connected
+            </span>
+          ) : (
+            <span className="text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/30 px-2.5 py-1 rounded-full font-semibold flex items-center gap-1">
+              <ShieldAlert className="w-3 h-3" />
+              {sfuError || "Connecting..."}
+            </span>
+          )}
+        </div>
+      </header>
+
+      {/* Main Content (Video Grid + Sidebar) */}
+      <main className="flex-1 relative flex overflow-hidden">
+        <div className="flex-1 h-full relative">
+          <VideoGrid
+            localStream={localStream}
+            localDisplayName={localDisplayName}
+            localMuted={isMuted}
+            localVideoOff={isVideoOff}
+            remoteTracks={remoteTracks}
+            participants={participants}
+            localParticipantId={localParticipantId}
+          />
+        </div>
 
         {/* Slide-in Participant Sidebar */}
         <ParticipantSidebar
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           participants={participants}
-          isHost={participant?.is_host || false}
+          currentParticipantId={localParticipantId}
+          isHost={isHost}
           onMuteAll={handleMuteAll}
           onRemoveParticipant={handleRemoveParticipant}
         />
-      </div>
+      </main>
 
-      {/* Zoom Control Bar */}
+      {/* Bottom Control Bar */}
       <ControlBar
         isMuted={isMuted}
         isVideoOff={isVideoOff}
-        onToggleMute={handleToggleMute}
-        onToggleVideo={handleToggleVideo}
-        onLeave={handleLeave}
-        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-        participantCount={participants.length}
+        isHost={isHost}
+        participantCount={participants.length || 1}
         meetingCode={meetingCode}
+        onToggleAudio={handleToggleAudio}
+        onToggleVideo={handleToggleVideo}
+        onLeaveMeeting={handleLeaveMeeting}
+        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
       />
     </div>
   );

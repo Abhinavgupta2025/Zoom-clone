@@ -7,6 +7,7 @@ interface ParticipantSidebarProps {
   isOpen: boolean;
   onClose: () => void;
   participants: Participant[];
+  currentParticipantId?: number;
   isHost: boolean;
   onMuteAll: () => void;
   onRemoveParticipant: (id: number) => void;
@@ -16,6 +17,7 @@ export function ParticipantSidebar({
   isOpen,
   onClose,
   participants,
+  currentParticipantId,
   isHost,
   onMuteAll,
   onRemoveParticipant,
